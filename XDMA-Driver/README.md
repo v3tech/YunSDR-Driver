@@ -4,16 +4,55 @@ Release `2020.2.2.yunsdr.20261126-1` supports x86_64 and AArch64. The DEB (`all`
 
 ## Installation
 
-From the release directory, run `sha256sum -c SHA256SUMS` and confirm that both files pass. If the target already uses an XDMA driver, record its path with `modinfo -n xdma` and its DKMS version with `dkms status -m xdma` before installation.
-
-**Debian or Ubuntu.** Install the build tools and headers for the running kernel, then install the DEB.
+For the DEB, open the package in GitHub and select **Download raw file**, or use the file in a checkout of the repository. Run the following commands in the directory containing the downloaded file (`XDMA-Driver/` in a checkout). Verify the checksum before installing. The expected architecture is `all`.
 
 ```sh
-sudo apt install dkms build-essential "linux-headers-$(uname -r)" mokutil
-sudo apt install ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
+deb=xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
+echo "67693f53a00a6a9a36a62bdbe9a9876ad2ca246dd3cf29473aa84f285eea237f  $deb" | sha256sum -c - &&
+  dpkg-deb -f "$deb" Package Version Architecture
 ```
 
-For a vendor kernel such as Jetson Linux, use the matching headers from the board support package (BSP) in place of the distribution header package. Verify that `/lib/modules/$(uname -r)/build/Makefile` is readable.
+If APT reports `Invalid archive signature` or cannot find `control.tar`, run `file "$deb"`. If it reports HTML, download the raw file again and repeat the checksum check.
+
+### NVIDIA Jetson with a Tegra kernel
+
+Use the headers for the **running L4T kernel**. On the tested Jetson AGX Orin with L4T R39.2.2, NVIDIA supplies them in `nvidia-l4t-kernel-headers`. The generic Ubuntu command below would request `linux-headers-6.8.12-1029-tegra`, which APT cannot locate on this system.
+
+```sh
+(
+  set -eu
+  kernel=$(uname -r)
+  build="/lib/modules/$kernel/build"
+  if [ ! -r "$build/Makefile" ] || [ ! -s "$build/Module.symvers" ] ||
+     [ "$(cat "$build/include/config/kernel.release" 2>/dev/null || true)" != "$kernel" ]; then
+    bsp=$(dpkg-query -W -f='${Version}' nvidia-l4t-kernel)
+    sudo apt install "nvidia-l4t-kernel-headers=$bsp"
+  fi
+  test -r "$build/Makefile" && test -s "$build/Module.symvers" &&
+    test "$(cat "$build/include/config/kernel.release")" = "$kernel" ||
+    { echo "Missing or mismatched kernel build tree: $build" >&2; exit 1; }
+  sudo apt install dkms build-essential ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
+)
+```
+
+If APT cannot find the exact NVIDIA package version, check that the NVIDIA APT repository matches the installed L4T release. For a custom BSP kernel, obtain its prepared kernel build tree from the BSP provider. Once the build-tree checks pass, run the block again. On systems enforcing module signatures, complete the Secure Boot steps for your BSP before loading the driver.
+
+```sh
+dkms status -m xdma -k "$(uname -r)"
+modinfo -n xdma
+sudo modprobe xdma
+lspci -nnk -d 10ee:
+ls -l /dev/xdma*_h2c_* /dev/xdma*_c2h_*
+```
+
+DKMS should report `installed` for the running kernel. With a supported board connected, look for `Kernel driver in use: xdma` and the H2C/C2H device nodes. If DKMS fails to compile, locate its build log with `sudo find /var/lib/dkms/xdma -name make.log -print`.
+
+### Debian or Ubuntu with a distribution kernel
+
+```sh
+sudo apt install dkms build-essential "linux-headers-$(uname -r)"
+sudo apt install ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
+```
 
 **Fedora or RHEL-family systems.** Enable a repository that supplies DKMS, then install the development package matching the running kernel and the XDMA RPM.
 
@@ -63,7 +102,7 @@ On ARM64 boards with a vendor-specific trust chain, follow the BSP procedure for
 
 ## Rebuilding the packages
 
-On host 203, run `./build.sh` from the release directory. The script uses `dpkg-deb` and `rpmbuild` and reads the adjacent `../linux-kernel` source tree. The package version combines the driver version from `xdma/version.h` with the YunSDR snapshot date.
+In the maintainer’s packaging workspace on host 203, run `./build.sh` from the release directory. The script uses `dpkg-deb` and `rpmbuild` and reads the adjacent `../linux-kernel` source tree. The package version combines the driver version from `xdma/version.h` with the YunSDR snapshot date.
 
 The compatibility change is part of `xdma/xdma_iova_ring.c`. The IOVA mmap code follows the kernel API selection in `cdev_ctrl.c` to set `VM_DONTEXPAND` and `VM_DONTDUMP` on both older and newer kernels. The release directory retains `vm-flags-compat.patch` as a record of the change.
 
@@ -73,6 +112,8 @@ The compatibility change is part of `xdma/xdma_iova_ring.c`. The IOVA mmap code 
 |---|---|
 | x86_64, Ubuntu 6.8.0-138-generic | Native DKMS build, isolated installation and removal, and CMS signature verification passed. |
 | AArch64, Jetson 5.15.148-tegra | Cross-build, isolated installation and removal, and CMS signature verification passed. |
+| x86_64, Ubuntu 22.04.4, 6.8.0-111-generic | Native DEB installation and DKMS rebuild passed. XDMA bound to 10ee:903f with two H2C and two C2H channels. |
+| Jetson AGX Orin, Ubuntu 24.04.5, L4T R39.2.2, 6.8.12-1029-tegra | Native DEB installation and module loading passed. XDMA bound to 10ee:9048 with one H2C and one C2H channel. UEFI Secure Boot was off. DKMS skipped signing because the signing helper was unavailable. |
 | Package lifecycle | DEB and RPM installation and removal passed in an x86_64 Ubuntu chroot. The RPM test used a separate RPM database with dependency resolution disabled. |
 
-See `verification.log` for the source comparison, build and signature checks, and `package-test.log` for package installation and removal. The signing tests used a temporary certificate. Secure Boot was disabled on the build host. Native Fedora/RHEL installation, module loading under enforced Secure Boot, and DMA transfers on hardware remain unverified.
+The maintainer’s release directory contains the test logs. See `verification.log` for the source comparison, build and signature checks, and `package-test.log` for package installation and removal. The signing tests used a temporary certificate. Secure Boot was disabled on the build host. Native Fedora/RHEL installation, module loading under enforced Secure Boot, and DMA transfers on hardware remain unverified.
