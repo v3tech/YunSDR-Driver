@@ -1,119 +1,72 @@
-# YunSDR XDMA DKMS packages
+# Install the YunSDR XDMA driver
 
-Release `2020.2.2.yunsdr.20261126-1` supports x86_64 and AArch64. The DEB (`all`) and RPM (`noarch`) contain the driver source. On the target machine, DKMS compiles `xdma.ko` against the kernel build tree. DKMS autoinstall is enabled for subsequent kernel updates.
+[中文](README.zh-CN.md)
 
-## Installation
+Use the DEB on Ubuntu, Debian or NVIDIA Jetson. Use the RPM on Fedora or a RHEL-based distribution. Both packages support x86_64 and ARM64. DKMS builds the driver for the running kernel during installation.
 
-For the DEB, open the package in GitHub and select **Download raw file**, or use the file in a checkout of the repository. Run the following commands in the directory containing the downloaded file (`XDMA-Driver/` in a checkout). Verify the checksum before installing. The expected architecture is `all`.
+- DEB: [xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb](./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb?raw=true)
+- RPM: [xdma-dkms-2020.2.2.yunsdr.20261126-1.noarch.rpm](./xdma-dkms-2020.2.2.yunsdr.20261126-1.noarch.rpm?raw=true)
 
-```sh
-deb=xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
-echo "67693f53a00a6a9a36a62bdbe9a9876ad2ca246dd3cf29473aa84f285eea237f  $deb" | sha256sum -c - &&
-  dpkg-deb -f "$deb" Package Version Architecture
-```
+If you open the file on GitHub, click **Download raw file**. Open a terminal in the download directory and follow the instructions for your system. If APT reports `Invalid archive signature`, run `file ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb`. An HTML result means you saved the web page. Download the raw file and try again.
 
-If APT reports `Invalid archive signature` or cannot find `control.tar`, run `file "$deb"`. If it reports HTML, download the raw file again and repeat the checksum check.
+## NVIDIA Jetson
 
-### NVIDIA Jetson with a Tegra kernel
-
-Use the headers for the **running L4T kernel**. On the tested Jetson AGX Orin with L4T R39.2.2, NVIDIA supplies them in `nvidia-l4t-kernel-headers`. The generic Ubuntu command below would request `linux-headers-6.8.12-1029-tegra`, which APT cannot locate on this system.
+On Jetson Linux (L4T), check the kernel release recorded in the headers against the running kernel:
 
 ```sh
-(
-  set -eu
-  kernel=$(uname -r)
-  build="/lib/modules/$kernel/build"
-  if [ ! -r "$build/Makefile" ] || [ ! -s "$build/Module.symvers" ] ||
-     [ "$(cat "$build/include/config/kernel.release" 2>/dev/null || true)" != "$kernel" ]; then
-    bsp=$(dpkg-query -W -f='${Version}' nvidia-l4t-kernel)
-    sudo apt install "nvidia-l4t-kernel-headers=$bsp"
-  fi
-  test -r "$build/Makefile" && test -s "$build/Module.symvers" &&
-    test "$(cat "$build/include/config/kernel.release")" = "$kernel" ||
-    { echo "Missing or mismatched kernel build tree: $build" >&2; exit 1; }
-  sudo apt install dkms build-essential ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
-)
+uname -r
+cat "/lib/modules/$(uname -r)/build/include/config/kernel.release"
 ```
 
-If APT cannot find the exact NVIDIA package version, check that the NVIDIA APT repository matches the installed L4T release. For a custom BSP kernel, obtain its prepared kernel build tree from the BSP provider. Once the build-tree checks pass, run the block again. On systems enforcing module signatures, complete the Secure Boot steps for your BSP before loading the driver.
+If the two versions match, skip straight to the driver installation below. If the second command reports a missing file or a different version and you use the NVIDIA kernel, install its matching headers:
 
 ```sh
-dkms status -m xdma -k "$(uname -r)"
-modinfo -n xdma
-sudo modprobe xdma
-lspci -nnk -d 10ee:
-ls -l /dev/xdma*_h2c_* /dev/xdma*_c2h_*
+bsp=$(dpkg-query -W -f='${Version}' nvidia-l4t-kernel)
+sudo apt install "nvidia-l4t-kernel-headers=$bsp"
 ```
 
-DKMS should report `installed` for the running kernel. With a supported board connected, look for `Kernel driver in use: xdma` and the H2C/C2H device nodes. If DKMS fails to compile, locate its build log with `sudo find /var/lib/dkms/xdma -name make.log -print`.
-
-### Debian or Ubuntu with a distribution kernel
+Check the versions again before installing the driver. If APT cannot find the requested version, check that the NVIDIA package repository matches your L4T release. For a custom kernel, use the headers supplied with your board support package (BSP).
 
 ```sh
-sudo apt install dkms build-essential "linux-headers-$(uname -r)"
-sudo apt install ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
+sudo apt install dkms build-essential ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
 ```
 
-**Fedora or RHEL-family systems.** Enable a repository that supplies DKMS, then install the development package matching the running kernel and the XDMA RPM.
+## Ubuntu or Debian with a distribution kernel
 
 ```sh
-sudo dnf install dkms gcc make "kernel-devel-$(uname -r)" mokutil
-sudo dnf install ./xdma-dkms-2020.2.2.yunsdr.20261126-1.noarch.rpm
+sudo apt install dkms build-essential "linux-headers-$(uname -r)" ./xdma-dkms_2020.2.2.yunsdr.20261126-1_all.deb
 ```
 
-Check that DKMS reports the module as installed for the running kernel. Inspect the path and kernel release selected by the module loader.
+## Fedora or RHEL
+
+Enable a repository that provides `dkms`, then install the package:
 
 ```sh
-dkms status -m xdma
-modinfo -n xdma
-modinfo -F vermagic xdma
+sudo dnf install dkms gcc make "kernel-devel-$(uname -r)" ./xdma-dkms-2020.2.2.yunsdr.20261126-1.noarch.rpm
 ```
 
-If Secure Boot is enabled, complete the enrollment check below before loading the module. If an older driver is in use, reboot during a maintenance window. Run `sudo modprobe xdma` and inspect the XDMA PCI device's **Kernel driver in use** entry in `lspci -nnk`.
+## Systems with Secure Boot enabled
 
-To uninstall, run `sudo apt remove xdma-dkms` on Debian or Ubuntu, or `sudo dnf remove xdma-dkms` on Fedora or RHEL-family systems.
-
-## Secure Boot
-
-On systems that use UEFI shim and Machine Owner Keys (MOK), configure DKMS to sign modules using the target machine's key. The installation log should show the signing command, the public certificate path and a signing entry for `xdma.ko`. See the [DKMS module signing guide](https://github.com/dkms-project/dkms#module-signing).
+If your system enforces module signatures, the driver must be signed with a key the kernel trusts. On systems using shim and Machine Owner Keys (MOK), check the Secure Boot state and module signer before loading the driver:
 
 ```sh
 mokutil --sb-state
 modinfo -F signer xdma
 ```
 
-Confirm that the signer field is populated. Set `CERT` to the **public certificate path reported by DKMS on this machine**. Ubuntu commonly uses the path below. Another common location is `/var/lib/dkms/mok.pub`.
+If the signer is empty, configure DKMS module signing for your distribution and reinstall the driver. If the module is signed and the certificate has not been enrolled, use the public certificate path from the DKMS installation log. Run `sudo mokutil --import /path/to/certificate.der` with that path and set a one-time password. Reboot, select **Enroll MOK** in MokManager and confirm. For Jetson boards using a vendor trust chain, follow the module-signing and certificate deployment instructions for your BSP.
+
+## Load the driver
 
 ```sh
-CERT=/var/lib/shim-signed/mok/MOK.der
-sudo mokutil --test-key "$CERT"
-```
-
-If the certificate is pending enrollment or has not been enrolled, complete enrollment. To start a new request, run `sudo mokutil --import "$CERT"` and set a one-time password. Reboot, select **Enroll MOK** in MokManager and confirm with that password. After rebooting, verify the Secure Boot state, enrollment and module load.
-
-```sh
-mokutil --sb-state
-sudo mokutil --test-key "$CERT"
+dkms status -m xdma -k "$(uname -r)"
 sudo modprobe xdma
-lsmod | grep '^xdma '
+lspci -nnk -d 10ee:
+ls -l /dev/xdma*
 ```
 
-On ARM64 boards with a vendor-specific trust chain, follow the BSP procedure for adding the module-signing certificate to the kernel's trusted keys. Private signing keys stay on the target machine.
+DKMS should report `installed` for the running kernel. With the board connected, its PCI entry should show `Kernel driver in use: xdma`. Look for `/dev/xdma0_control` and the H2C and C2H channel nodes supported by your board.
 
-## Rebuilding the packages
+## Uninstall
 
-In the maintainer’s packaging workspace on host 203, run `./build.sh` from the release directory. The script uses `dpkg-deb` and `rpmbuild` and reads the adjacent `../linux-kernel` source tree. The package version combines the driver version from `xdma/version.h` with the YunSDR snapshot date.
-
-The compatibility change is part of `xdma/xdma_iova_ring.c`. The IOVA mmap code follows the kernel API selection in `cdev_ctrl.c` to set `VM_DONTEXPAND` and `VM_DONTDUMP` on both older and newer kernels. The release directory retains `vm-flags-compat.patch` as a record of the change.
-
-## Validation
-
-| Test | Result |
-|---|---|
-| x86_64, Ubuntu 6.8.0-138-generic | Native DKMS build, isolated installation and removal, and CMS signature verification passed. |
-| AArch64, Jetson 5.15.148-tegra | Cross-build, isolated installation and removal, and CMS signature verification passed. |
-| x86_64, Ubuntu 22.04.4, 6.8.0-111-generic | Native DEB installation and DKMS rebuild passed. XDMA bound to 10ee:903f with two H2C and two C2H channels. |
-| Jetson AGX Orin, Ubuntu 24.04.5, L4T R39.2.2, 6.8.12-1029-tegra | Native DEB installation and module loading passed. XDMA bound to 10ee:9048 with one H2C and one C2H channel. UEFI Secure Boot was off. DKMS skipped signing because the signing helper was unavailable. |
-| Package lifecycle | DEB and RPM installation and removal passed in an x86_64 Ubuntu chroot. The RPM test used a separate RPM database with dependency resolution disabled. |
-
-The maintainer’s release directory contains the test logs. See `verification.log` for the source comparison, build and signature checks, and `package-test.log` for package installation and removal. The signing tests used a temporary certificate. Secure Boot was disabled on the build host. Native Fedora/RHEL installation, module loading under enforced Secure Boot, and DMA transfers on hardware remain unverified.
+On Ubuntu, Debian or Jetson, run `sudo apt remove xdma-dkms`. On Fedora or RHEL, run `sudo dnf remove xdma-dkms`.
